@@ -1,0 +1,423 @@
+---
+title: "Appendix - Detailed R Code"
+author: "Owen R. Evans"
+date: "6/13/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(openxlsx)
+library(ggplot2)
+library(janitor)
+library(dlookr)
+library(psych)
+library(car)
+library(summarytools)
+library(corrplot)
+```
+# Exploratory Data Analysis - Customer Dataset
+## Variable Grouping
+The dataset in question contains a total of 59 variables and 5000 observations.   It is derived from a survey of existing telecom customers and provides information concerning customer demographics, location, financial status and relevant business transactions.  Variables that elucidate customer lifestyle, discretionary income, place of residence or demographics may be predictive of customer value/revenue,  customer loyalty,  or churn.
+
+The variables in the dataset were regrouped in order to properly distinguish between possible explanatory variables and key business performance metrics.
+
+``` {r Load Data and Regroup Variables}
+setwd("~/Desktop/Data Due Diligence Project")
+Data1 <- read.xlsx("CustomerData.xlsx", sheet = 1, 
+                   na.strings = c("","NA","#NULL!"))
+
+########################
+# Regrouping Variables #
+########################
+
+# Group 1 - Identifer
+ID <- "CustomerID"
+
+# Group 2 - Geographic
+Geo <- c("Region","TownSize")
+
+# Group 3 - Demographic, Financial
+DemoFin <- c("HHIncome",
+             "DebtToIncomeRatio",
+             "CreditDebt",
+             "OtherDebt",
+             "LoanDefault",
+             "CreditCard",
+             "CardTenure",
+             "CardItemsMonthly",
+             "CardSpendMonth")
+
+#Group 4 - Demographic
+Demo <- c('Gender',
+          'Age',
+          'EducationYears',
+          'JobCategory',
+          'UnionMember',
+          'EmploymentLength',
+          'Retired',
+          'MaritalStatus',
+          'HouseholdSize',
+          'HomeOwner',
+          'PoliticalPartyMem',
+          'Votes')
+
+# Group 5 - Lifestyle
+Life <- c('NumberPets',
+          'NumberCats',
+          'NumberDogs',
+          'NumberBirds',
+          'CarsOwned',
+          'CarOwnership',
+          'CarBrand',
+          'CarValue',
+          'CommuteTime',
+          'ActiveLifestyle',
+          'TVWatchingHours',
+          'OwnsPC',
+          'OwnsMobileDevice',
+          'OwnsGameSystem',
+          'OwnsFax',
+          'NewsSubscriber')
+
+#Group 6 - Transactional / Business
+Business <- c('PhoneCoTenure',
+              'VoiceLastMonth',
+              'VoiceOverTenure',
+              'EquipmentRental',
+              'EquipmentLastMonth',
+              'EquipmentOverTenure',
+              'CallingCard',
+              'WirelessData',
+              'DataLastMonth',
+              'DataOverTenure',
+              'Multiline',
+              'VM',
+              'Pager',
+              'Internet',
+              'CallerID',
+              'CallWait',
+              'CallForward',
+              'ThreeWayCalling',
+              'EBilling')
+
+# Reorder Data Set
+col_order <- c(ID,Geo,Demo, DemoFin, Life, Business)
+Data1 <- Data1[, col_order]
+
+```
+## Missing Data
+The dataset in question contains a total of 131 missing values across 11 different values. The code below will identify the (suspect_vars) variables with missing values as well as the frequency and proportion of missing values within each of the suspect variables. 
+
+The following missing values in the following variables were fixed: Gender, NumberBirds, HomeOwner & JobCategory (Top 4 Frequency Counts).   All other observations with missing values were of such a small frequency they were removed from the dataset. 
+
+*Gender* - no longer a binary response, added a third factor (undeclared)
+
+*NumberBirds* - replaced missing values with mode (zero)
+
+*HomeOwner* - replaced missing values with mode (yes)
+
+*JobCategory* - number of factors is likely no sufficient to cover the range of possible responses.  Missing values are likely those with jobs in categories not covered with the current factors.  Added another factor "Other" to cover all responses.   Assigned missing values to "Other".
+
+``` {r Missing Values - Treatment}
+
+################
+# Missing Data #
+################
+
+# How Many Missing Values? - 131 across the entire data set
+# Where are the Missing Values located?
+sum(is.na(Data1))
+missing <- sapply(Data1, function(x) sum(is.na(x)))
+missing <- missing[missing != 0]
+print(missing)
+suspect_vars <- names(missing)
+print(suspect_vars)
+
+missing_perc <- sapply(Data1, function(x) sum(is.na(x))/length(x))*100
+missing_perc <- missing_perc[missing_perc > 0.0]
+print(missing_perc)
+
+# Focus on these variables (top 3) to fix missing values - Gender, Birds, Homeowner
+# For Gender - act another factor level
+str(Data1$Gender)
+Data1 <- Data1 %>% mutate(Gender = ifelse(is.na(Gender), "Undeclared", Gender))
+table(Data1$Gender)
+
+# For Birds - convert no response to zero
+table(Data1$NumberBirds)
+Data1 <- Data1 %>% mutate(NumberBirds = ifelse(is.na(NumberBirds), 0, NumberBirds))
+
+# Homeownership - Inspect Characteristics of NA's
+# Replace with most frequent value (mode)
+HomeNA <- filter(Data1, is.na(HomeOwner))
+table(Data1$HomeOwner) # frequency of yes (1) is 1.7x that of no (0)
+Data1 <- mutate(Data1, 
+                HomeOwner = ifelse(is.na(HomeOwner), 1, HomeOwner)) 
+# Convert NA's to Yes - most frequent response
+remove(HomeNA)
+Data1$HomeOwner <- as.factor(Data1$HomeOwner)
+levels(Data1$HomeOwner) <- c("No", "Yes") # recode 0,1 to No,Yes
+
+# NA treatment Job Category
+# Categories are not extensive
+# N/A might be other
+str(Data1$JobCategory)
+unique(Data1$JobCategory)
+JobNA <- Data1 %>% filter(is.na(JobCategory))
+#View(JobNA)
+Data1 <- mutate(Data1, 
+         JobCategory = ifelse(is.na(JobCategory), "Other", JobCategory))
+#remove(JobNA)
+
+# All Other NA's - Eliminate from Dataset,  Very low frequency
+Data1 <- na.omit(Data1)
+
+```
+
+## Data Quality Issues 
+Did not import strings as factors.   Need to convert 33 select variables to categorical (factors).  
+
+A few variables needed recoding in order to deal with data quality issues.   First,  internet has 5 separate levels possibly indicating different levels of service.   This variable was recoded to a binary response,  assuming that every non-negative response indicates the use of Internet.   All observations of 2,3 or 4 were converted to "Yes". 
+
+Both CarOwnership and CarBrand had a -1 dummy variable.   Based upon the pattern of the data and relevant CarValue response (i.e. less than zero), it was assumed that the -1 response represents those folks that do not own a vehicle.  As such, an additional factor ("None") was added to both variables to account for the -1 dummy response.   Likewise,  all -1000 responses for CarValue was converted to zero - to account for those folks that do not own vehicles.
+
+Finally,  since all customers in this transactional database have a non-zero tenure with the company, any zero responses for the PhoneCoTenure were converted to 1 (i.e. round to nearest positive value). This will be necessary to reliably calculate the ARPU (average revenue per user), a calculation that will use PhoneCoTenure in the denominator.
+
+
+``` {r Data Quality Issues}
+
+##################
+# Data Structure #
+##################
+# Will need to recode 33 categorical variables to factors
+str(Data1)
+
+z <- c("Region","TownSize", "Gender", 
+       "JobCategory", "UnionMember", 
+       "Retired", "MaritalStatus", 
+       "HouseholdSize", "HomeOwner",
+       "PoliticalPartyMem", "Votes",
+       "LoanDefault", "CreditCard", 
+       "CarOwnership", "CarBrand", 
+       "ActiveLifestyle", "OwnsPC",
+       "OwnsMobileDevice", "OwnsGameSystem",
+       "OwnsFax", "NewsSubscriber", "EquipmentRental",
+       "CallingCard", "WirelessData", "Multiline",
+       "VM", "Pager", "Internet", "CallerID",
+       "CallWait", "CallForward", "ThreeWayCalling",
+       "EBilling")
+
+Data1[z]<-lapply(Data1[z],factor)
+
+#################
+# Data Problems #
+#################
+
+# Internet Recoding
+# Convert 2,3,4 to yes values,  
+# assuming that any other answer than zero indicates the affirmative
+table(Data1$Internet)
+str(Data1$Internet)
+
+Data1 <- Data1 %>% mutate (Internet = case_when(Internet == "2" ~ "Yes",
+                                       Internet == "3" ~ "Yes",
+                                       Internet == "4" ~ "Yes",
+                                       Internet == "Yes" ~ "Yes",
+                                       Internet == "No" ~ "No"))
+
+# Car Ownership, Car Brand
+# Change the -1 to None - Assuming these are folks who don't own cars
+levels(Data1$CarOwnership) <- c("None", "Lease", "Own")
+levels(Data1$CarBrand) <- c("None", "Domestic", "Foreign")
+
+# CarValue - Replace -1000 values to 0
+Data1 <- Data1 %>% mutate(CarValue= ifelse(CarValue==-1000, 0, CarValue))
+
+# PhoneCoTenure - Eliminate Zero Values - NonNegative Value Needed for ARPU
+Data1 <- mutate(Data1, PhoneCoTenure = 
+                  replace(PhoneCoTenure, PhoneCoTenure == 0, 1))
+
+```
+
+## Feature Engineering - New Variables & Transformations
+A number of key variables were transformed to allow for hypothesis testing (normality needed) and/or modeling.   Specifically,  a right skewed HHIncome variable was power transformed to normality. A discretized HHIncome and AgeGroup variable was also derived. 
+
+Finally,  four new potentially useful variables were added.  The total revenue per user over tenure was calculated for all users via the summation of all revenue from all services (VoiceOverTenure, DataOverTenure and EquipmentOverTenure).   The average revenue per user (ARPU) was calculated via Total Revenue divided by PhoneCoTenure.  A measure of the strength of recent monthly revenue for each user was derived via the ratio of the sum of last month revenue and ARPU.  A recent revenue variation of 1,  for instance, would indicate an individual monthly revenue outcome equivalent to average (stagnant growth).   Those that are significant multiples of 1,  possibly indicate high growth customer targets.  
+
+The percent utilization (VoiceUtil) of highest grossing service (Voice) for each user was also determined. 
+
+``` {r, adding new variables}
+####################################################
+# Variable Transformations and Feature Engineering #
+####################################################
+
+# HHIncome, Right Skewed Data
+# Power transformed to normality
+hist(Data1$HHIncome)
+summary(powerTransform(Data1$HHIncome))  # Max Likelihood/BoxCox
+Data1$TransHHIncome <- Data1$HHIncome ^ -0.1708
+hist(Data1$TransHHIncome) 
+
+# HHIncome,  Binned, Convert Continuous to Discrete
+# Potentially important for segmentation exercise
+
+Data1 <- mutate(Data1, HHIncomeBin = case_when(
+  HHIncome < 20000                        ~ "<$20,000",
+  HHIncome >= 20000 & HHIncome <40000     ~ "$20,000-$39,999",
+  HHIncome >= 40000 & HHIncome <60000     ~ "$40,000-$59,999",
+  HHIncome >= 60000 & HHIncome <80000     ~ "$60,000-$79,999",
+  HHIncome >= 80000 & HHIncome <100000    ~ "$80,000-$99,999",
+  HHIncome >= 100000                     ~ ">$100,000"
+  )
+)
+
+Data1$HHIncomeBin <- as.factor (Data1$HHIncomeBin)
+table(Data1$HHIncomeBin)
+Data1$HHIncomeBin <- factor(Data1$HHIncomeBin, 
+                          levels = c("<$20,000", "$20,000-$39,999", 
+                          "$40,000-$59,999", "$60,000-$79,999",
+                          "$80,000-$99,999", ">$100,000")
+                          )
+#View(Data1[,c("HHIncome","HHIncomeBin")])
+
+# Binned Age Group
+Data1 <- mutate(Data1, AgeBin = case_when(
+  Age < 20                  ~ "<20",
+  Age >= 20 & Age <30        ~ "20-29",
+  Age >= 30 & Age <40       ~ "30-39",
+  Age >= 40 & Age <50       ~ "40-49",
+  Age >= 50& Age  <60        ~ "50-59",
+  Age >= 60 & Age <70       ~ "60-69",
+  Age >=70                  ~ "70+"
+  )
+)
+
+str(Data1$AgeBin)
+Data1$AgeBin <- as.factor (Data1$AgeBin)
+table(Data1$AgeBin)
+
+# Adding Total Revenue per User Over PhoneCoTenure
+# Adding ARPU - Average Revenue per User - Total Revenue/Tenure
+# Adding Recent Rev Variation
+# How much does the last month revenue per user differ from average?
+
+Data1 <- mutate(Data1, Total_Revenue = VoiceOverTenure + EquipmentOverTenure + 
+                DataOverTenure)
+Data1 <- mutate(Data1, ARPU = Total_Revenue/PhoneCoTenure)
+Data1 <- mutate(Data1, RecentRevenueVariation = ((DataLastMonth+VoiceLastMonth+
+                                                    EquipmentLastMonth)/ARPU))
+Data1[,c("ARPU", "RecentRevenueVariation", "Total_Revenue")]
+
+hist(Data1$ARPU) # Heavy Right Skew
+hist(log(Data1$ARPU)) # Normalized
+
+Data1$ARPU_Log <- log(Data1$ARPU)
+
+# Determine most frequently used service
+
+attach(Data1)
+x <- sum(VoiceLastMonth, DataLastMonth, EquipmentLastMonth)
+y <- c(sum(VoiceLastMonth), sum(DataLastMonth), sum(EquipmentLastMonth))
+z <- y/x
+a <- c("Voice", "Data", "Equipment")
+names(z) <- a
+detach(Data1)
+print(z)
+
+Data1 <- mutate(Data1, VoiceUtil = 
+                  VoiceLastMonth/(VoiceLastMonth+
+                                    DataLastMonth+
+                                    EquipmentLastMonth)*100)
+
+
+
+```
+
+
+## Univariate Analysis / Descriptive Statistics
+### Numerical Variables
+
+Summary statistics for all numerical variables were derived using the describe function from the psych package.   A number of financial related variables (HHIncome, CreditDebt, OtherDebt and CardSpend) and transactional variables (VoiceLastMonth, EquipmentLastMonth, etc) exhibit a highly positive skewness - indicating a right skewed , non-normal distribution for a fair number of variables. The skew results as these variables have many zero responses.  
+
+A lot of variables have outliers as defined by 1.5*IQR from Q1 or Q3.   In most cases,  the outliers appear legitimate or were derived mainly because a number of variables have a large number of zero responses.   No outliers were removed from the data.
+
+``` {r Univariate Analysis - Numerical Variables}
+
+#####################################
+# Univariate Descriptive Statistics #
+#####################################
+# Use pysch:describe to afford summary table
+
+# Numeric, Continuous Variables
+Data1_Num <- select_if(Data1, is.numeric)
+SumTableNum <- psych::describe(Data1_Num, 
+                               IQR=TRUE, 
+                               quant=c(0.25,0.75))
+
+names(SumTableNum) <- c( "Vars", "n", "Mean", "Standard Deviation",      
+                         "Median", "Trimmed Mean" , "Mad", "Min" ,    
+                         "Max", "Range", "Skew" , "Kurtosis",
+                         "SE" , "IQR", "Q1", "Q3")
+
+write.csv(SumTableNum, "SummaryTableNum.csv")
+
+#############################################################
+# Inspect Key Numerics for Skew and/or Outliers #
+#############################################################
+
+# Find possible outliers via +/- 1.5 IQR Values
+
+SumTableNum <- mutate (SumTableNum, Outliers = case_when (
+         Max > (Q3+(1.5 * IQR))| Min < (Q1-(1.5 * IQR)) ~ "Yes",
+         TRUE ~ "No"))
+
+Outliers <- filter(SumTableNum, Outliers == "Yes") 
+
+#boxplot(Data1$HHIncome) # High Earners
+#boxplot(Data1$EmploymentLength) # Most subscribers are new workers
+#boxplot(Data1$HouseholdSize) # A few larger families
+#boxplot(Data1$VoiceOverTenure) # Zero Inflated
+#boxplot(Data1$CreditDebt) # Zero Inflated
+#boxplot(Data1$TVWatchingHours) # A few extremes
+
+```
+
+### Categorical Variables 
+Frequency and proportion tables for a few select categorical variables were derived using the 
+
+``` {r Categorical Frequency Table}
+
+##################################
+# Selected Categorical Variables #
+##################################
+
+Data1_Cat <- select_if(Data1, is.factor)
+
+# Age Breakdown
+AgeSum <- summarytools::freq(Data1$AgeBin)
+write.csv (AgeSum, "AgeSum.csv")
+
+# Breakdown of Income
+IncomeSum <- summarytools::freq(Data1$HHIncomeBin)
+write.csv (IncomeSum, "IncomeSum.csv")
+
+# Breakdown of Gender
+GenderSum <- summarytools::freq(Data1$Gender)
+write.csv (GenderSum, "GenderSum.csv")
+
+# Breakdown of Region
+RegionSum <- summarytools::freq(Data1$Region)
+write.csv (RegionSum, "RegionSum.csv")
+
+# Breakdown of Equipment Rental
+EquipSum <- summarytools::freq(Data1$EquipmentRental)
+write.csv (EquipmentRental, "EquipSum.csv")
+
+```
+
+
+
+
